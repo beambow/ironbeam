@@ -8,18 +8,20 @@
 :root{--cyan:#7df3ff;--gold:#e0a526;--red:#b3121b}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:#000;color:var(--cyan);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+#wrap{position:fixed;inset:0;overflow:hidden}
 #stage{position:absolute;transform:scaleX(-1)}
 #stage video,#stage canvas{position:absolute;inset:0;width:100%;height:100%}
-#stage video{filter:brightness(.8) contrast(1.1)}
+#stage video{filter:brightness(.85) contrast(1.1)}
 #tint{position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 50% 45%,transparent 40%,rgba(0,20,40,.7) 100%)}
 #scan{position:fixed;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,transparent,var(--cyan),transparent);box-shadow:0 0 14px var(--cyan);opacity:0;pointer-events:none}
 body.hud #scan{opacity:.85;animation:scan 3s linear infinite}
 @keyframes scan{to{top:100%}}
-#bar{position:fixed;left:0;right:0;bottom:0;padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));background:linear-gradient(transparent,rgba(0,10,20,.92));text-align:center}
-#status{font-size:12px;opacity:.7;min-height:1.3em}
-#heard{min-height:1.5em;font-size:15px;letter-spacing:.04em;margin:2px 0 8px}
-.btns{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
-button{background:rgba(125,243,255,.1);color:var(--cyan);border:1px solid var(--cyan);border-radius:999px;padding:9px 14px;font-size:13px}
+#bar{position:fixed;left:0;right:0;bottom:0;padding:10px 10px calc(12px + env(safe-area-inset-bottom,0px));background:linear-gradient(transparent,rgba(0,10,20,.92));text-align:center}
+#lock{font-size:13px;font-weight:600;letter-spacing:.05em;color:#ffb86b}
+#status{font-size:11px;opacity:.6;min-height:1.2em}
+#heard{min-height:1.5em;font-size:15px;margin:2px 0 8px}
+.btns{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+button{background:rgba(125,243,255,.1);color:var(--cyan);border:1px solid var(--cyan);border-radius:999px;padding:8px 12px;font-size:12px}
 button:active{background:rgba(125,243,255,.35)}
 #start{position:fixed;inset:0;z-index:9;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:radial-gradient(circle,#1b0507,#000);text-align:center;padding:24px}
 #start h1{margin:0;font-size:26px;letter-spacing:.2em;color:var(--gold)}
@@ -29,20 +31,21 @@ button:active{background:rgba(125,243,255,.35)}
 </style>
 </head>
 <body>
-<div id="stage"><video id="cam" playsinline muted autoplay></video><canvas id="gl"></canvas></div>
+<div id="wrap"><div id="stage"><video id="cam" playsinline muted autoplay></video><canvas id="gl"></canvas></div></div>
 <div id="tint"></div><div id="scan"></div>
 <div id="bar">
- <div id="status"></div>
+ <div id="lock"></div><div id="status"></div>
  <div id="heard">…</div>
  <div class="btns">
   <button data-c="buka">Buka</button><button data-c="tutup">Tutup</button>
   <button data-c="nyala">Mata ON</button><button data-c="mati">Mata OFF</button>
   <button data-c="tembak">Tembak</button><button data-c="hud">HUD</button>
+  <button id="mic">Mic: ON</button>
  </div>
 </div>
 <div id="start">
  <h1>JARVIS 3D</h1>
- <p>Helm Iron Man 3D mengikuti wajahmu lewat kamera depan. Perintah suara: "buka", "tutup", "mata nyala", "mata mati", "tembak", "hud".</p>
+ <p>Ucapkan <b>"beama"</b> untuk membuka kunci suara, lalu katakan: "buka", "tutup", "mata nyala", "mata mati", "tembak", "hud", atau "kunci".</p>
  <button id="go">Aktifkan</button>
  <div id="err"></div>
 </div>
@@ -52,49 +55,78 @@ button:active{background:rgba(125,243,255,.35)}
 const T=THREE,B=document.body,$=id=>document.getElementById(id);
 const VISION='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 const MODEL='https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
-const stage=$('stage'),video=$('cam'),status=$('status'),heard=$('heard');
+const WAKE=/\b(beama|beam|bima|bema|bhima|biama|bimo)\b/;   // kata sandi suara
+const stage=$('stage'),video=$('cam'),status=$('status'),heard=$('heard'),lockEl=$('lock');
 
-/* ---------- Scene ---------- */
+/* ---------- Renderer & lingkungan studio ---------- */
 const renderer=new T.WebGLRenderer({canvas:$('gl'),alpha:true,antialias:true});
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+renderer.outputEncoding=T.sRGBEncoding;renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=1.1;
 const scene=new T.Scene(),cam=new T.PerspectiveCamera(63,3/4,1,1000);
-scene.add(new T.HemisphereLight(0xffffff,0x334466,1.15));
-const dl=new T.DirectionalLight(0xffffff,.9);dl.position.set(0,20,30);scene.add(dl);
+(function(){
+ const s=new T.Scene(),c=document.createElement('canvas');c.width=2;c.height=256;
+ const x=c.getContext('2d'),g=x.createLinearGradient(0,0,0,256);
+ g.addColorStop(0,'#cfe2ff');g.addColorStop(.5,'#5a6678');g.addColorStop(1,'#1c1610');x.fillStyle=g;x.fillRect(0,0,2,256);
+ s.add(new T.Mesh(new T.SphereGeometry(50,32,16),new T.MeshBasicMaterial({map:new T.CanvasTexture(c),side:T.BackSide})));
+ [[0,35,25,40,14],[-40,5,10,10,40],[40,5,10,10,40]].forEach(([px,py,pz,w,h])=>{
+  const m=new T.Mesh(new T.PlaneGeometry(w,h),new T.MeshBasicMaterial({color:0xffffff,side:T.DoubleSide}));
+  m.material.color.setScalar(5);m.position.set(px,py,pz);m.lookAt(0,0,0);s.add(m)});
+ scene.environment=new T.PMREMGenerator(renderer).fromScene(s).texture;
+})();
+scene.add(new T.HemisphereLight(0xffffff,0x334466,.35));
+const dl=new T.DirectionalLight(0xffffff,.6);dl.position.set(0,20,30);scene.add(dl);
 
+/* ---------- Material ---------- */
+const goldM=new T.MeshStandardMaterial({color:0xf2b72c,metalness:1,roughness:.2,side:T.DoubleSide,transparent:true});
+const goldS=goldM.clone();goldS.transparent=false;
+const redM=new T.MeshPhysicalMaterial({color:0xc4101a,metalness:.7,roughness:.3,clearcoat:1,clearcoatRoughness:.1,side:T.DoubleSide});
+const darkM=new T.MeshStandardMaterial({color:0x2a1c04,metalness:.8,roughness:.5,transparent:true});
+const eyeMat=new T.MeshBasicMaterial({color:0xdffeff,side:T.DoubleSide,transparent:true});
+const fadeMats=[goldM,darkM,eyeMat];
+
+/* ---------- Model helm ---------- */
 const head=new T.Group();head.matrixAutoUpdate=false;head.visible=false;scene.add(head);
-/* KALIBRASI: geser angka ini kalau helm kurang pas di wajahmu (satuan cm) */
-const C=[0,1.5,-4];                 // pusat kepala
-const pv=new T.Group();pv.position.set(0,9,-4);head.add(pv); // engsel penutup wajah
+/* KALIBRASI: geser angka ini kalau helm kurang pas (cm) */
+const C=[0,1.5,-4];
+const pv=new T.Group();pv.position.set(0,9,-4);head.add(pv);           // engsel penutup wajah
 const put=(m,x,y,z)=>{m.position.set(x,y-9,z+4);pv.add(m);return m};
-const mk=(g,mat,r,p,parent)=>{const m=new T.Mesh(g,mat);m.scale.set(...r);m.position.set(...p);(parent||head).add(m);return m};
+const mk=(g,mat,r,p)=>{const m=new T.Mesh(g,mat);m.scale.set(...r);m.position.set(...p);head.add(m);return m};
 
-// penghalang kedalaman (tak terlihat) supaya bagian dalam helm tidak menutupi wajah
 const occ=mk(new T.SphereGeometry(1,24,16),new T.MeshBasicMaterial({colorWrite:false}),[7.6,10,8],[0,1,-3]);occ.renderOrder=-1;
-// cangkang merah (depan terbuka)
-mk(new T.SphereGeometry(1,40,30,Math.PI/2+1,Math.PI*2-2),new T.MeshPhongMaterial({color:0xb3121b,shininess:90,side:T.DoubleSide}),[9.6,11.8,10.6],C);
-// penutup wajah emas
-const gold=new T.MeshPhongMaterial({color:0xe0a526,shininess:120,side:T.DoubleSide});
-put(new T.Mesh(new T.SphereGeometry(1,40,30,Math.PI/2-1,2,.08*Math.PI,.92*Math.PI),gold),...C).scale.set(10,12.2,11.2);
-// mata
-const eyeMat=new T.MeshBasicMaterial({color:0xcffcff}),eyes=[];
-[-1,1].forEach(s=>{const e=put(new T.Mesh(new T.BoxGeometry(3,.9,.9),eyeMat),s*3.6,3.2,6.5);e.rotation.y=s*.38;e.rotation.z=s*.22;eyes.push(e)});
-// kisi mulut
-const dark=new T.MeshPhongMaterial({color:0x5a3a05});
-[[-5.5,5.3],[-6.8,4.3],[-8.1,3]].forEach(([y,z])=>put(new T.Mesh(new T.BoxGeometry(5,.35,.6),dark),0,y,z));
-// sinar tembak
-const beams=[-1,1].map(s=>{const b=new T.Mesh(new T.BoxGeometry(.8,.8,60),new T.MeshBasicMaterial({color:0x9ff6ff}));b.position.set(s*3.6,3.2,37);b.visible=false;head.add(b);return b});
+mk(new T.SphereGeometry(1,64,48,Math.PI/2+1,Math.PI*2-2),redM,[9.6,11.8,10.6],C);                     // cangkang
+put(new T.Mesh(new T.SphereGeometry(1,64,48,Math.PI/2-1,2,.08*Math.PI,.92*Math.PI),goldM),...C).scale.set(10,12.2,11.2); // penutup wajah
+[-1,1].forEach(s=>{const e=mk(new T.CylinderGeometry(3.4,3.4,1.4,40),goldS,[1,1,1],[s*9.7,.5,-3.5]);e.rotation.z=Math.PI/2}); // cakram telinga
+
+// alur & detail penutup wajah
+const box=(w,h,d,x,y,z,ry,rz,rx)=>{const m=put(new T.Mesh(new T.BoxGeometry(w,h,d),darkM),x,y,z);m.rotation.set(rx||0,ry||0,rz||0)};
+box(7.5,.35,.6,0,7.5,5.9,0,0,-.25);                                   // alur dahi
+[-1,1].forEach(s=>box(5,.3,.6,s*5.6,-3.5,4.3,s*.5,s*-.6));             // alur pipi
+[[-5.4,5.3,4.6],[-6.55,4.5,4.2],[-7.7,3.5,3.6],[-8.85,2.2,2.8]].forEach(([y,z,w])=>box(w,.35,.6,0,y,z)); // kisi mulut
+put(new T.Mesh(new T.BoxGeometry(.5,5,.5),goldM),0,-.5,7.1);          // sorot hidung
+
+// mata (bentuk miring) + cahaya
+const shp=new T.Shape();shp.moveTo(0,0);shp.lineTo(3.3,.8);shp.lineTo(3.2,1.6);shp.lineTo(0,.85);
+const gc=document.createElement('canvas');gc.width=gc.height=64;
+const gx=gc.getContext('2d'),gg=gx.createRadialGradient(32,32,0,32,32,32);
+gg.addColorStop(0,'rgba(160,250,255,1)');gg.addColorStop(1,'rgba(160,250,255,0)');gx.fillStyle=gg;gx.fillRect(0,0,64,64);
+const glows=[];
+[-1,1].forEach(s=>{
+ const e=put(new T.Mesh(new T.ShapeGeometry(shp),eyeMat),s*1.9,2.2,6.75);e.scale.x=s;e.rotation.y=s*.38;
+ const sp=put(new T.Sprite(new T.SpriteMaterial({map:new T.CanvasTexture(gc),blending:T.AdditiveBlending,transparent:true,depthWrite:false})),s*3.6,2.9,7.4);
+ sp.scale.set(7,3.5,1);glows.push(sp)});
+const beams=[-1,1].map(s=>{const b=new T.Mesh(new T.BoxGeometry(.8,.8,60),new T.MeshBasicMaterial({color:0x9ff6ff}));b.position.set(s*3.6,2.9,37);b.visible=false;head.add(b);return b});
 
 /* ---------- Ukuran mengikuti video ---------- */
 function layout(){
- const vw=video.videoWidth||3,vh=video.videoHeight||4;
- const k=Math.max(innerWidth/vw,innerHeight/vh),w=vw*k,h=vh*k;
+ const vw=video.videoWidth||3,vh=video.videoHeight||4,k=Math.max(innerWidth/vw,innerHeight/vh),w=vw*k,h=vh*k;
  Object.assign(stage.style,{width:w+'px',height:h+'px',left:(innerWidth-w)/2+'px',top:(innerHeight-h)/2+'px'});
  renderer.setSize(w,h,false);cam.aspect=vw/vh;cam.updateProjectionMatrix();
 }
 addEventListener('resize',layout);video.addEventListener('loadedmetadata',layout);layout();
 
-/* ---------- Pelacak wajah ---------- */
-let landmarker=null,lastT=-1,open=false;
+/* ---------- Pelacak wajah + penghalusan ---------- */
+let landmarker=null,lastT=-1,lastDet=0,have=false,seen=0,eyesOn=true,open=false,p=0;
+const tp=new T.Vector3(),tq=new T.Quaternion(),ts=new T.Vector3(1,1,1),cp=new T.Vector3(),cq=new T.Quaternion(),cs=new T.Vector3(1,1,1),tm=new T.Matrix4();
 async function loadTracker(){
  try{
   status.textContent='Memuat pelacak wajah…';
@@ -102,57 +134,89 @@ async function loadTracker(){
   const fs=await FilesetResolver.forVisionTasks(VISION+'/wasm');
   landmarker=await FaceLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:MODEL,delegate:'GPU'},runningMode:'VIDEO',numFaces:1,outputFacialTransformationMatrixes:true});
   status.textContent='Pelacakan wajah aktif';
- }catch(e){status.textContent='Pelacak wajah gagal dimuat (butuh internet & halaman HTTPS). Mode demo.';landmarker=null}
+ }catch(e){status.textContent='Pelacak wajah gagal dimuat (butuh internet & HTTPS). Mode demo.';landmarker=null}
 }
+function detect(n){
+ if(n-lastDet<30)return;lastDet=n;
+ const r=landmarker.detectForVideo(video,n),m=r.facialTransformationMatrixes&&r.facialTransformationMatrixes[0];
+ if(!m)return;
+ tm.fromArray(m.data).decompose(tp,tq,ts);seen=n;
+ if(!have){cp.copy(tp);cq.copy(tq);cs.copy(ts);have=true}
+}
+let last=performance.now();
 function loop(){
  requestAnimationFrame(loop);
+ const n=performance.now(),dt=Math.min((n-last)/1000,.1);last=n;
  if(landmarker){
-  if(video.readyState>=2&&video.currentTime!==lastT){
-   lastT=video.currentTime;
-   const r=landmarker.detectForVideo(video,performance.now());
-   const m=r.facialTransformationMatrixes&&r.facialTransformationMatrixes[0];
-   if(m){head.matrix.fromArray(m.data);head.visible=true}else head.visible=false;
-  }
- }else{
-  head.matrix.makeRotationY(Math.sin(performance.now()/900)*.3).setPosition(0,-1,-45);head.visible=true;
- }
- pv.rotation.x+=((open?-1.45:0)-pv.rotation.x)*.12;
+  if(video.readyState>=2&&video.currentTime!==lastT){lastT=video.currentTime;detect(n)}
+  if(have){const k=1-Math.exp(-dt*22);cp.lerp(tp,k);cq.slerp(tq,k);cs.lerp(ts,k);head.matrix.compose(cp,cq,cs);head.visible=n-seen<400}
+ }else{head.matrix.makeRotationY(Math.sin(n/900)*.3).setPosition(0,-1,-45);head.visible=true}
+ // penutup wajah: naik, menyusut, memudar
+ p+=((open?1:0)-p)*(1-Math.exp(-dt*5));
+ const f=Math.min(1,Math.max(0,(p-.3)/.7));
+ pv.position.set(0,9+14*p,-4-3*p);pv.scale.setScalar(1-.2*p);pv.visible=f<.98;
+ fadeMats.forEach(m=>m.opacity=1-f);
+ glows.forEach(g=>g.material.opacity=eyesOn?.9*(1-f):0);
  renderer.render(scene,cam);
 }
 loop();
 
-/* ---------- Suara ---------- */
-function say(t){try{const u=new SpeechSynthesisUtterance(t);u.lang='id-ID';u.rate=1.05;speechSynthesis.cancel();speechSynthesis.speak(u)}catch(e){}}
+/* ---------- Suara + kata sandi ---------- */
+let speaking=false,ignoreUntil=0,unlocked=false,fresh=false,lockT=0,rec=null,wantMic=false;
+function say(t){
+ try{const u=new SpeechSynthesisUtterance(t);u.lang='id-ID';u.rate=1.05;speaking=true;
+  u.onend=u.onerror=()=>{speaking=false;ignoreUntil=performance.now()+700};
+  speechSynthesis.cancel();speechSynthesis.speak(u)}catch(e){speaking=false}
+}
+function setLock(u){unlocked=u;lockEl.textContent=u?'🔓 TERBUKA — katakan perintah':'🔒 TERKUNCI — ucapkan "beama"';lockEl.style.color=u?'#9dffb0':'#ffb86b'}
+function keep(){clearTimeout(lockT);lockT=setTimeout(()=>{if(unlocked){setLock(false);say('Sistem terkunci')}},20000)}
+setLock(false);
 function act(c){
- c=(c||'').toLowerCase();
- if(/tutup|pasang|turun/.test(c)){open=false;say('Helm terpasang')}
- else if(/buka|naik|lepas/.test(c)){open=true;say('Helm terbuka')}
- else if(/mata\s*(mati|padam)|matikan|^mati$/.test(c)){eyeMat.color.set(0x222a2c);say('Mata dimatikan')}
- else if(/nyala|hidup|aktif/.test(c)){eyeMat.color.set(0xcffcff);say('Mata menyala')}
- else if(/tembak|repulsor|api|serang/.test(c)){beams.forEach(b=>b.visible=true);say('Repulsor aktif');setTimeout(()=>beams.forEach(b=>b.visible=false),450)}
- else if(/hud|scan|pindai|radar/.test(c)){B.classList.toggle('hud');say(B.classList.contains('hud')?'Pemindaian aktif':'Pemindaian nonaktif')}
- else if(/jarvis|halo|hai/.test(c)){say('Siap, bos')}
+ if(/\b(tutup|pasang|turun)\b/.test(c)){open=false;say('Helm terpasang')}
+ else if(/\b(buka|naik|lepas)\b/.test(c)){open=true;say('Helm dibuka')}
+ else if(/mata\s*(mati|padam)|matikan|^mati$/.test(c)){eyesOn=false;eyeMat.color.set(0x222a2c);say('Mata dimatikan')}
+ else if(/\b(nyala|hidup|aktif)\b/.test(c)){eyesOn=true;eyeMat.color.set(0xdffeff);say('Mata menyala')}
+ else if(/\b(tembak|repulsor|api|serang)\b/.test(c)){beams.forEach(b=>b.visible=true);say('Repulsor aktif');setTimeout(()=>beams.forEach(b=>b.visible=false),450)}
+ else if(/\b(hud|scan|pindai|radar)\b/.test(c)){B.classList.toggle('hud');say(B.classList.contains('hud')?'Pemindaian aktif':'Pemindaian nonaktif')}
 }
 document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>act(b.dataset.c));
-function startVoice(){
+function listen(on){
+ wantMic=on;$('mic').textContent='Mic: '+(on?'ON':'OFF');
+ if(!on){try{rec&&rec.stop()}catch(e){}heard.textContent='Mikrofon dimatikan';return}
  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
  if(!SR){heard.textContent='Suara tidak didukung di browser ini. Pakai tombol.';return}
- const r=new SR();r.lang='id-ID';r.continuous=true;r.interimResults=true;
- r.onresult=e=>{const last=e.results[e.results.length-1],t=last[0].transcript;heard.textContent=last.isFinal?'"'+t.trim()+'"':t;if(last.isFinal)act(t)};
- r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed')heard.textContent='Izin mikrofon ditolak. Pakai tombol.'};
- r.onend=()=>{try{r.start()}catch(e){}};
- try{r.start();heard.textContent='Mendengarkan…'}catch(e){}
+ if(!rec){
+  rec=new SR();rec.lang='id-ID';rec.continuous=true;rec.interimResults=true;
+  rec.onresult=e=>{
+   if(speaking||performance.now()<ignoreUntil)return;
+   const last=e.results[e.results.length-1],text=last[0].transcript,l=text.toLowerCase();
+   heard.textContent=last.isFinal?'"'+text.trim()+'"':text;
+   if(!unlocked&&WAKE.test(l)){setLock(true);fresh=true;keep()}
+   if(last.isFinal&&unlocked){
+    keep();const c=l.replace(WAKE,' ').trim();
+    if(/\bkunci\b/.test(c)){setLock(false);say('Sistem terkunci')}
+    else if(c)act(c);else if(fresh)say('Akses diterima');
+    fresh=false;
+   }
+  };
+  rec.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){wantMic=false;heard.textContent='Izin mikrofon ditolak. Pakai tombol.'}};
+  rec.onend=()=>{if(wantMic)setTimeout(()=>{try{rec.start()}catch(e){}},250)};
+ }
+ try{rec.start()}catch(e){}
+ heard.textContent='Mendengarkan…';
 }
+$('mic').onclick=()=>listen(!wantMic);
+let resume=false;
+document.addEventListener('visibilitychange',()=>{if(document.hidden){resume=wantMic;if(wantMic)listen(false)}else if(resume){resume=false;listen(true)}});
 
 /* ---------- Mulai ---------- */
 $('go').onclick=async()=>{
  try{
-  const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});
+  const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},audio:false});
   video.srcObject=s;await video.play();layout();
  }catch(e){$('err').textContent='Kamera tidak bisa dibuka ('+(e.name||'error')+'). Pastikan halaman HTTPS dan izin kamera diberikan.';return}
  $('start').style.display='none';
- startVoice();say('Sistem aktif');
- loadTracker();
+ listen(true);say('Sistem aktif');loadTracker();
 };
 </script>
 </body>
